@@ -9,7 +9,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.verify import CheckResult, evaluate_checks, run_command, summarize_checks
+from scripts.verify import (
+    CheckResult,
+    assess_platform_compatibility,
+    check_git_whitespace,
+    evaluate_checks,
+    run_command,
+    summarize_checks,
+)
 
 
 def get_repo_root() -> Path:
@@ -30,6 +37,7 @@ EXPECTED_DIRECTORIES = [
     Path(".agents") / "rules",
     Path(".agents") / "skills",
     Path("docs"),
+    Path("scripts"),
     Path("tests"),
 ]
 
@@ -261,3 +269,37 @@ def test_summarize_checks_categorization(checks, expected_summary):
     """Verify that summarize_checks accurately categorizes required and optional checks."""
     summary = summarize_checks(checks)
     assert summary == expected_summary
+
+
+def test_check_git_whitespace_skips_when_not_git_repo(tmp_path: Path):
+    """Verify check_git_whitespace returns SKIPPED when directory is not a Git repository."""
+    result = check_git_whitespace(tmp_path)
+    assert result.status == "SKIPPED"
+    assert result.is_required is False
+    assert result.exit_code == 0
+    assert "not a Git repository" in result.details
+
+
+def test_assess_platform_compatibility_on_windows_host():
+    """Verify assess_platform_compatibility on host Windows environment marks Termux as UNTESTED."""
+    results = assess_platform_compatibility()
+    host_check = next(c for c in results if "Host Environment" in c.name)
+    assert host_check.status == "PASSED"
+    assert host_check.is_required is True
+
+    termux_check = next(c for c in results if "Android Termux" in c.name)
+    assert termux_check.status == "UNTESTED"
+    assert termux_check.is_required is False
+    assert "Host platform is not Android Termux" in termux_check.details
+
+
+def test_assess_platform_compatibility_termux_detection_naming():
+    """Verify that Termux detection explicitly communicates detection rather than verified compatibility."""
+    from unittest.mock import patch
+
+    with patch.dict("os.environ", {"TERMUX_VERSION": "0.118.0"}):
+        results = assess_platform_compatibility()
+    termux_check = next(c for c in results if "Android Termux" in c.name)
+    assert termux_check.name == "Android Termux Environment Detection"
+    assert termux_check.is_required is False
+    assert "detection only" in termux_check.details.lower()

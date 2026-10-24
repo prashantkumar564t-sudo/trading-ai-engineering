@@ -65,9 +65,27 @@ def check_environment(repo_root: Path) -> dict[str, str]:
 
 def check_git_whitespace(repo_root: Path) -> CheckResult:
     """Run git diff --check on both unstaged and staged changes."""
+    if not (repo_root / ".git").exists():
+        return CheckResult(
+            name="Git Whitespace Check (unstaged & staged)",
+            status="SKIPPED",
+            details="Project directory is not a Git repository; Git whitespace validation requires repository metadata.",
+            exit_code=0,
+            is_required=False,
+        )
+
     try:
         proc_unstaged = run_command(["git", "diff", "--check"], cwd=repo_root)
         proc_staged = run_command(["git", "diff", "--cached", "--check"], cwd=repo_root)
+
+        if proc_unstaged.returncode == 128 and "not a git repository" in proc_unstaged.stderr.lower():
+            return CheckResult(
+                name="Git Whitespace Check (unstaged & staged)",
+                status="SKIPPED",
+                details="Project directory is not a Git repository; Git whitespace validation requires repository metadata.",
+                exit_code=0,
+                is_required=False,
+            )
 
         has_unstaged_issues = proc_unstaged.returncode != 0
         has_staged_issues = proc_staged.returncode != 0
@@ -187,9 +205,9 @@ def assess_platform_compatibility() -> list[CheckResult]:
     if is_termux:
         results.append(
             CheckResult(
-                name="Android Termux Environment",
+                name="Android Termux Environment Detection",
                 status="PASSED",
-                details="Termux environment identified on host. (Requires full test pass to confirm compatibility).",
+                details="Termux environment identified on host (detection only; compatibility requires verified test execution).",
                 exit_code=0,
                 is_required=False,
             )
