@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.verify import CheckResult, evaluate_checks
+from scripts.verify import CheckResult, evaluate_checks, run_command, summarize_checks
 
 
 def get_repo_root() -> Path:
@@ -169,3 +169,95 @@ def test_verification_aggregation_outcomes(checks, expected_outcome, expected_ex
     outcome, exit_code = evaluate_checks(checks)
     assert outcome == expected_outcome
     assert exit_code == expected_exit
+
+
+def test_run_command_decodes_valid_utf8():
+    """Verify that run_command preserves valid UTF-8 output including non-ASCII characters."""
+    repo_root = get_repo_root()
+    test_str = "UTF-8 verified: 成功 ✔ — Greek: αβγ — Accents: café"
+    code = f"import sys; sys.stdout.buffer.write({test_str.encode('utf-8')!r})"
+    proc = run_command([sys.executable, "-c", code], cwd=repo_root)
+    assert proc.returncode == 0
+    assert proc.stdout == test_str
+
+
+def test_run_command_replaces_malformed_utf8_bytes():
+    """Verify that run_command safely replaces malformed UTF-8 bytes with replacement character."""
+    repo_root = get_repo_root()
+    code = "import sys; sys.stdout.buffer.write(b'prefix ' + bytes([0xff, 0xfe]) + b' suffix')"
+    proc = run_command([sys.executable, "-c", code], cwd=repo_root)
+    assert proc.returncode == 0
+    assert proc.stdout == "prefix \ufffd\ufffd suffix"
+
+
+@pytest.mark.parametrize(
+    "checks,expected_summary",
+    [
+        (
+            [
+                CheckResult("req1", "PASSED", "ok", 0, is_required=True),
+                CheckResult("req2", "PASSED", "ok", 0, is_required=True),
+                CheckResult("opt1", "UNTESTED", "info", None, is_required=False),
+            ],
+            {
+                "passed_required": 2,
+                "failed_required": 0,
+                "incomplete_required": 0,
+                "failed_optional": 0,
+                "skipped_total": 0,
+                "untested_total": 1,
+            },
+        ),
+        (
+            [
+                CheckResult("req1", "PASSED", "ok", 0, is_required=True),
+                CheckResult("req2", "SKIPPED", "skip", 0, is_required=True),
+                CheckResult("opt1", "FAILED", "opt err", 1, is_required=False),
+            ],
+            {
+                "passed_required": 1,
+                "failed_required": 0,
+                "incomplete_required": 1,
+                "failed_optional": 1,
+                "skipped_total": 1,
+                "untested_total": 0,
+            },
+        ),
+        (
+            [
+                CheckResult("req1", "FAILED", "err", 1, is_required=True),
+                CheckResult("req2", "UNTESTED", "untested req", None, is_required=True),
+                CheckResult("opt1", "UNTESTED", "untested opt", None, is_required=False),
+            ],
+            {
+                "passed_required": 0,
+                "failed_required": 1,
+                "incomplete_required": 1,
+                "failed_optional": 0,
+                "skipped_total": 0,
+                "untested_total": 2,
+            },
+        ),
+        (
+            [],
+            {
+                "passed_required": 0,
+                "failed_required": 0,
+                "incomplete_required": 0,
+                "failed_optional": 0,
+                "skipped_total": 0,
+                "untested_total": 0,
+            },
+        ),
+    ],
+    ids=[
+        "all_required_passed_with_optional_untested",
+        "required_skipped_and_optional_failed",
+        "required_failed_and_untested",
+        "empty_input",
+    ],
+)
+def test_summarize_checks_categorization(checks, expected_summary):
+    """Verify that summarize_checks accurately categorizes required and optional checks."""
+    summary = summarize_checks(checks)
+    assert summary == expected_summary

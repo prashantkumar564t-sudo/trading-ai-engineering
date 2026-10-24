@@ -37,6 +37,8 @@ def run_command(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         cwd=str(cwd),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         shell=False,
     )
 
@@ -222,6 +224,20 @@ def evaluate_checks(checks: list[CheckResult]) -> tuple[str, int]:
     return overall_outcome, exit_code
 
 
+def summarize_checks(checks: list[CheckResult]) -> dict[str, int]:
+    """Tally check results across required, optional, skipped, and untested categories."""
+    return {
+        "passed_required": len([c for c in checks if c.is_required and c.status == "PASSED"]),
+        "failed_required": len([c for c in checks if c.is_required and c.status == "FAILED"]),
+        "incomplete_required": len(
+            [c for c in checks if c.is_required and c.status in ("SKIPPED", "UNTESTED")]
+        ),
+        "failed_optional": len([c for c in checks if not c.is_required and c.status == "FAILED"]),
+        "skipped_total": len([c for c in checks if c.status == "SKIPPED"]),
+        "untested_total": len([c for c in checks if c.status == "UNTESTED"]),
+    }
+
+
 def main() -> int:
     """Main verification orchestrator routine."""
     repo_root = get_repo_root()
@@ -268,24 +284,22 @@ def main() -> int:
             print(f"             {dline}")
     print()
 
-    # Tally results
-    passed_required = [c for c in checks if c.status == "PASSED" and c.is_required]
-    failed_required = [c for c in checks if c.status == "FAILED" and c.is_required]
-    skipped_checks = [c for c in checks if c.status == "SKIPPED"]
-    untested_checks = [c for c in checks if c.status == "UNTESTED"]
-
+    # Tally and evaluate results
+    summary = summarize_checks(checks)
     overall_outcome, exit_code = evaluate_checks(checks)
 
     print("=" * 70)
     print("                       VERIFICATION SUMMARY")
     print("=" * 70)
-    print(f"  Required Checks Passed : {len(passed_required)}")
-    print(f"  Required Checks Failed : {len(failed_required)}")
-    print(f"  Skipped Checks         : {len(skipped_checks)}")
-    print(f"  Untested Capabilities  : {len(untested_checks)}")
+    print(f"  Required Checks Passed     : {summary['passed_required']}")
+    print(f"  Required Checks Failed     : {summary['failed_required']}")
+    print(f"  Required Checks Incomplete : {summary['incomplete_required']}")
+    print(f"  Optional Checks Failed     : {summary['failed_optional']}")
+    print(f"  Skipped Checks (Total)     : {summary['skipped_total']}")
+    print(f"  Untested Capabilities      : {summary['untested_total']}")
     print("-" * 70)
 
-    print(f"  OVERALL OUTCOME        : {overall_outcome}")
+    print(f"  OVERALL OUTCOME            : {overall_outcome}")
     print("=" * 70)
 
     return exit_code
