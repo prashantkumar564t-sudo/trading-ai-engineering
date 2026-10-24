@@ -206,6 +206,22 @@ def assess_platform_compatibility() -> list[CheckResult]:
     return results
 
 
+def evaluate_checks(checks: list[CheckResult]) -> tuple[str, int]:
+    """Evaluate check results to determine overall verification outcome and exit code.
+
+    Requires at least one required check and requires all required checks to have
+    status 'PASSED'. Optional checks do not impact the overall pass/fail status.
+    Empty inputs fail conservatively.
+    """
+    required_checks = [c for c in checks if c.is_required]
+    all_required_passed = len(required_checks) > 0 and all(
+        c.status == "PASSED" for c in required_checks
+    )
+    overall_outcome = "PASSED" if all_required_passed else "FAILED"
+    exit_code = 0 if all_required_passed else 1
+    return overall_outcome, exit_code
+
+
 def main() -> int:
     """Main verification orchestrator routine."""
     repo_root = get_repo_root()
@@ -258,7 +274,7 @@ def main() -> int:
     skipped_checks = [c for c in checks if c.status == "SKIPPED"]
     untested_checks = [c for c in checks if c.status == "UNTESTED"]
 
-    all_required_passed = len(failed_required) == 0
+    overall_outcome, exit_code = evaluate_checks(checks)
 
     print("=" * 70)
     print("                       VERIFICATION SUMMARY")
@@ -269,11 +285,10 @@ def main() -> int:
     print(f"  Untested Capabilities  : {len(untested_checks)}")
     print("-" * 70)
 
-    overall_outcome = "PASSED" if all_required_passed else "FAILED"
     print(f"  OVERALL OUTCOME        : {overall_outcome}")
     print("=" * 70)
 
-    return 0 if all_required_passed else 1
+    return exit_code
 
 
 if __name__ == "__main__":

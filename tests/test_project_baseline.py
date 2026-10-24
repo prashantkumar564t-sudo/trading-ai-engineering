@@ -2,7 +2,14 @@
 
 from pathlib import Path
 import py_compile
+import sys
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.verify import CheckResult, evaluate_checks
 
 
 def get_repo_root() -> Path:
@@ -96,3 +103,69 @@ def test_documentation_files_are_valid_utf8(rel_path: Path):
         assert len(content) > 0, f"Expected non-empty content in: {rel_path}"
     except UnicodeDecodeError as exc:
         pytest.fail(f"UTF-8 decoding failure in {rel_path}: {exc}")
+
+
+@pytest.mark.parametrize(
+    "checks,expected_outcome,expected_exit",
+    [
+        (
+            [
+                CheckResult("req1", "PASSED", "ok", 0, is_required=True),
+                CheckResult("req2", "PASSED", "ok", 0, is_required=True),
+                CheckResult("opt1", "UNTESTED", "info", None, is_required=False),
+            ],
+            "PASSED",
+            0,
+        ),
+        (
+            [
+                CheckResult("req1", "FAILED", "err", 1, is_required=True),
+                CheckResult("req2", "PASSED", "ok", 0, is_required=True),
+            ],
+            "FAILED",
+            1,
+        ),
+        (
+            [
+                CheckResult("req1", "PASSED", "ok", 0, is_required=True),
+                CheckResult("opt1", "FAILED", "opt err", 1, is_required=False),
+            ],
+            "PASSED",
+            0,
+        ),
+        (
+            [
+                CheckResult("req1", "SKIPPED", "skip", 0, is_required=True),
+                CheckResult("req2", "PASSED", "ok", 0, is_required=True),
+            ],
+            "FAILED",
+            1,
+        ),
+        (
+            [
+                CheckResult("req1", "UNTESTED", "untested", None, is_required=True),
+                CheckResult("req2", "PASSED", "ok", 0, is_required=True),
+            ],
+            "FAILED",
+            1,
+        ),
+        (
+            [],
+            "FAILED",
+            1,
+        ),
+    ],
+    ids=[
+        "all_required_passed",
+        "required_failed",
+        "optional_failed_required_passed",
+        "required_skipped_fails_overall",
+        "required_untested_fails_overall",
+        "empty_input_fails_conservatively",
+    ],
+)
+def test_verification_aggregation_outcomes(checks, expected_outcome, expected_exit):
+    """Verify that evaluate_checks enforces strict pass requirements for required checks."""
+    outcome, exit_code = evaluate_checks(checks)
+    assert outcome == expected_outcome
+    assert exit_code == expected_exit
