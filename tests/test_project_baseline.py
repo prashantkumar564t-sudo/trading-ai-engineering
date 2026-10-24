@@ -284,28 +284,56 @@ def test_check_git_whitespace_skips_when_not_git_repo(tmp_path: Path):
     assert "not a Git repository" in result.details
 
 
-def test_assess_platform_compatibility_on_windows_host():
-    """Verify assess_platform_compatibility on host Windows environment marks Termux as UNTESTED."""
+def test_assess_platform_compatibility_non_termux_environment(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify assess_platform_compatibility marks Termux as UNTESTED when not in Termux environment."""
+    monkeypatch.setattr(sys, "prefix", "/standard/python/prefix")
+    monkeypatch.delenv("TERMUX_VERSION", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
     results = assess_platform_compatibility()
     host_check = next(c for c in results if "Host Environment" in c.name)
     assert host_check.status == "PASSED"
     assert host_check.is_required is True
 
     termux_check = next(c for c in results if "Android Termux" in c.name)
+    assert termux_check.name == "Android Termux Target"
     assert termux_check.status == "UNTESTED"
     assert termux_check.is_required is False
+    assert termux_check.exit_code is None
     assert "Host platform is not Android Termux" in termux_check.details
 
 
-def test_assess_platform_compatibility_termux_detection_naming():
-    """Verify that Termux detection explicitly communicates detection rather than verified compatibility."""
-    from unittest.mock import patch
+@pytest.mark.parametrize(
+    "setup_termux_env",
+    [
+        lambda mp: mp.setenv("TERMUX_VERSION", "0.118.0"),
+        lambda mp: mp.setattr(sys, "prefix", "/data/data/com.termux/files/usr"),
+        lambda mp: mp.setenv("PATH", "/data/data/com.termux/files/usr/bin:/bin"),
+    ],
+    ids=["termux_version_env", "termux_sys_prefix", "termux_path_env"],
+)
+def test_assess_platform_compatibility_termux_environment_detection(
+    monkeypatch: pytest.MonkeyPatch, setup_termux_env
+):
+    """Verify assess_platform_compatibility reports environment detection when Termux is detected."""
+    monkeypatch.setattr(sys, "prefix", "/standard/python/prefix")
+    monkeypatch.delenv("TERMUX_VERSION", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
 
-    with patch.dict("os.environ", {"TERMUX_VERSION": "0.118.0"}):
-        results = assess_platform_compatibility()
+    setup_termux_env(monkeypatch)
+
+    results = assess_platform_compatibility()
+    host_check = next(c for c in results if "Host Environment" in c.name)
+    assert host_check.status == "PASSED"
+    assert host_check.is_required is True
+
     termux_check = next(c for c in results if "Android Termux" in c.name)
     assert termux_check.name == "Android Termux Environment Detection"
+    assert termux_check.status == "PASSED"
     assert termux_check.is_required is False
+    assert termux_check.exit_code == 0
     assert "detection only" in termux_check.details.lower()
 
 
