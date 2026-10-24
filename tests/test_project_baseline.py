@@ -1,5 +1,6 @@
 """Baseline verification test for project structure, syntax, and documentation."""
 
+import subprocess
 from pathlib import Path
 import py_compile
 import sys
@@ -11,10 +12,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.verify import (
     CheckResult,
+    DEFAULT_SUBPROCESS_TIMEOUT,
     assess_platform_compatibility,
+    check_environment,
     check_git_whitespace,
+    check_working_tree,
     evaluate_checks,
     run_command,
+    run_pytest_suite,
     summarize_checks,
 )
 
@@ -302,3 +307,86 @@ def test_assess_platform_compatibility_termux_detection_naming():
     assert termux_check.name == "Android Termux Environment Detection"
     assert termux_check.is_required is False
     assert "detection only" in termux_check.details.lower()
+
+
+def test_run_command_raises_timeout_expired():
+    """Verify that run_command raises subprocess.TimeoutExpired on a short timeout."""
+    repo_root = get_repo_root()
+    code = "import time; time.sleep(1.0)"
+    with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+        run_command([sys.executable, "-c", code], cwd=repo_root, timeout=0.05)
+    assert exc_info.value.timeout == 0.05
+
+
+@pytest.mark.parametrize(
+    "stdout_payload,stderr_payload,expected_out_snippet,expected_err_snippet",
+    [
+        ("test_item PASSED\ntest_item2 RUNNING", "warning emitted", "test_item PASSED", "warning emitted"),
+        (b"bytes stdout \xff item", b"bytes stderr", "bytes stdout \ufffd item", "bytes stderr"),
+        (None, None, "", ""),
+    ],
+    ids=["string_streams", "bytes_streams", "none_streams"],
+)
+def test_run_pytest_suite_handles_timeout(
+    tmp_path: Path,
+    stdout_payload,
+    stderr_payload,
+    expected_out_snippet,
+    expected_err_snippet,
+):
+    """Verify run_pytest_suite converts TimeoutExpired into a failed required check with diagnostics."""
+    from unittest.mock import patch
+
+    timeout_exc = subprocess.TimeoutExpired(
+        cmd=["pytest", "tests/"],
+        timeout=30.0,
+        output=stdout_payload,
+        stderr=stderr_payload,
+    )
+
+    with patch("scripts.verify.run_command", side_effect=timeout_exc):
+        result = run_pytest_suite(tmp_path)
+
+    assert result.status == "FAILED"
+    assert result.is_required is True
+    assert result.exit_code == 1
+    assert "timed out after 30.0 seconds" in result.details
+    if expected_out_snippet:
+        assert expected_out_snippet in result.details
+    if expected_err_snippet:
+        assert expected_err_snippet in result.details
+
+
+def test_check_git_whitespace_handles_timeout(tmp_path: Path):
+    """Verify check_git_whitespace converts TimeoutExpired into a failed required check."""
+    from unittest.mock import patch
+
+    (tmp_path / ".git").mkdir()
+
+    timeout_exc = subprocess.TimeoutExpired(
+        cmd=["git", "diff", "--check"],
+        timeout=15.0,
+    )
+
+    with patch("scripts.verify.run_command", side_effect=timeout_exc):
+        result = check_git_whitespace(tmp_path)
+
+    assert result.status == "FAILED"
+    assert result.is_required is True
+    assert result.exit_code == 1
+    assert "timed out after 15.0 seconds" in result.details
+
+
+def test_check_environment_and_working_tree_handle_timeout(tmp_path: Path):
+    """Verify informational helpers handle TimeoutExpired cleanly without crashing."""
+    from unittest.mock import patch
+
+    timeout_exc = subprocess.TimeoutExpired(cmd=["git"], timeout=10.0)
+
+    with patch("scripts.verify.run_command", side_effect=timeout_exc):
+        env_info = check_environment(tmp_path)
+        assert "timed out after 10.0s" in env_info["Git Version"]
+
+        state, details = check_working_tree(tmp_path)
+        assert state == "Unavailable"
+        assert "timed out after 10.0s" in details

@@ -30,8 +30,45 @@ class CheckResult:
     is_required: bool = True
 
 
-def run_command(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Execute a command safely without shell expansion."""
+DEFAULT_SUBPROCESS_TIMEOUT: float = 60.0
+
+
+def _normalize_stream_output(stream: object) -> str:
+    """Safely normalize subprocess stream output (bytes, str, or None) to string."""
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", errors="replace").strip()
+    return str(stream).strip()
+
+
+def _format_timeout_details(
+    check_name: str,
+    cmd: object,
+    exc: subprocess.TimeoutExpired,
+) -> str:
+    """Format diagnostic details for a timed-out subprocess execution."""
+    if isinstance(cmd, list):
+        cmd_str = " ".join(str(c) for c in cmd)
+    else:
+        cmd_str = str(cmd) if cmd else "unknown"
+
+    lines = [f"{check_name} timed out after {exc.timeout} seconds.\nCommand: {cmd_str}"]
+    stdout = _normalize_stream_output(getattr(exc, "stdout", None) or getattr(exc, "output", None))
+    stderr = _normalize_stream_output(getattr(exc, "stderr", None))
+    if stdout:
+        lines.append(f"Partial stdout:\n{stdout}")
+    if stderr:
+        lines.append(f"Partial stderr:\n{stderr}")
+    return "\n\n".join(lines)
+
+
+def run_command(
+    cmd: list[str],
+    cwd: Path,
+    timeout: Optional[float] = DEFAULT_SUBPROCESS_TIMEOUT,
+) -> subprocess.CompletedProcess[str]:
+    """Execute a command safely without shell expansion with an optional timeout."""
     return subprocess.run(
         cmd,
         cwd=str(cwd),
@@ -40,6 +77,7 @@ def run_command(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         encoding="utf-8",
         errors="replace",
         shell=False,
+        timeout=timeout,
     )
 
 
@@ -57,6 +95,8 @@ def check_environment(repo_root: Path) -> dict[str, str]:
             env_info["Git Version"] = proc.stdout.strip()
         else:
             env_info["Git Version"] = f"Unavailable (git exited with code {proc.returncode})"
+    except subprocess.TimeoutExpired as exc:
+        env_info["Git Version"] = f"Unavailable (git --version timed out after {exc.timeout}s)"
     except FileNotFoundError:
         env_info["Git Version"] = "Unavailable (git executable not found in PATH)"
 
@@ -118,6 +158,15 @@ def check_git_whitespace(repo_root: Path) -> CheckResult:
             exit_code=exit_code,
             is_required=True,
         )
+    except subprocess.TimeoutExpired as exc:
+        cmd_used = getattr(exc, "cmd", None) or ["git", "diff", "--check"]
+        return CheckResult(
+            name="Git Whitespace Check (unstaged & staged)",
+            status="FAILED",
+            details=_format_timeout_details("Git whitespace check", cmd_used, exc),
+            exit_code=1,
+            is_required=True,
+        )
     except FileNotFoundError:
         return CheckResult(
             name="Git Whitespace Check (unstaged & staged)",
@@ -141,6 +190,8 @@ def check_working_tree(repo_root: Path) -> tuple[str, str]:
                 return "Modified / Untracked", f"Working tree contains {len(lines)} change(s):\n{output}"
         else:
             return "Unavailable", f"git status returned non-zero exit code: {proc.returncode}"
+    except subprocess.TimeoutExpired as exc:
+        return "Unavailable", f"Git working tree check timed out after {exc.timeout}s."
     except FileNotFoundError:
         return "Unavailable", "Git command unavailable in PATH."
 
@@ -171,6 +222,14 @@ def run_pytest_suite(repo_root: Path) -> CheckResult:
                 exit_code=proc.returncode,
                 is_required=True,
             )
+    except subprocess.TimeoutExpired as exc:
+        return CheckResult(
+            name="Automated Test Suite (pytest tests/ -v)",
+            status="FAILED",
+            details=_format_timeout_details("Automated test suite (pytest)", cmd, exc),
+            exit_code=1,
+            is_required=True,
+        )
     except FileNotFoundError:
         return CheckResult(
             name="Automated Test Suite (pytest tests/ -v)",
