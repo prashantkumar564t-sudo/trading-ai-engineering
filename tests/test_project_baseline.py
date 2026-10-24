@@ -35,7 +35,6 @@ EXPECTED_DOCUMENTATION_FILES = [
 
 EXPECTED_DIRECTORIES = [
     Path(".agents") / "rules",
-    Path(".agents") / "skills",
     Path("docs"),
     Path("scripts"),
     Path("tests"),
