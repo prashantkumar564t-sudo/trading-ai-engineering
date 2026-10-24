@@ -1,6 +1,7 @@
-"""Baseline verification test for project structure and documentation."""
+"""Baseline verification test for project structure, syntax, and documentation."""
 
 from pathlib import Path
+import py_compile
 import pytest
 
 
@@ -26,6 +27,28 @@ EXPECTED_DIRECTORIES = [
 ]
 
 
+def get_project_python_files() -> list[Path]:
+    """Discover all project-owned Python files while excluding caches and environments."""
+    root = get_repo_root()
+    excluded_parts = {
+        ".git",
+        ".pytest_cache",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        ".tox",
+        ".nox",
+    }
+    python_files = []
+    for path in root.rglob("*.py"):
+        rel_parts = path.relative_to(root).parts
+        if any(part in excluded_parts for part in rel_parts):
+            continue
+        python_files.append(path)
+    return sorted(python_files)
+
+
 @pytest.mark.parametrize("rel_path", EXPECTED_DOCUMENTATION_FILES)
 def test_baseline_files_exist_and_non_empty(rel_path: Path):
     """Verify that expected baseline documentation files exist and contain content."""
@@ -45,3 +68,31 @@ def test_baseline_directories_exist(rel_dir: Path):
 
     assert target_dir.exists(), f"Expected directory does not exist: {rel_dir}"
     assert target_dir.is_dir(), f"Expected path to be a directory: {rel_dir}"
+
+
+@pytest.mark.parametrize(
+    "py_file",
+    get_project_python_files(),
+    ids=lambda p: str(p.relative_to(get_repo_root())),
+)
+def test_python_syntax_compilation(py_file: Path, tmp_path: Path):
+    """Verify that project Python files compile cleanly without syntax errors."""
+    target_pyc = tmp_path / f"{py_file.stem}_compiled.pyc"
+    try:
+        py_compile.compile(str(py_file), cfile=str(target_pyc), doraise=True)
+    except py_compile.PyCompileError as exc:
+        pytest.fail(f"Syntax compilation error in {py_file}: {exc}")
+
+
+@pytest.mark.parametrize("rel_path", EXPECTED_DOCUMENTATION_FILES)
+def test_documentation_files_are_valid_utf8(rel_path: Path):
+    """Verify that all project documentation and instruction files decode cleanly as UTF-8."""
+    root = get_repo_root()
+    target_file = root / rel_path
+
+    assert target_file.exists(), f"Target file does not exist: {rel_path}"
+    try:
+        content = target_file.read_text(encoding="utf-8", errors="strict")
+        assert len(content) > 0, f"Expected non-empty content in: {rel_path}"
+    except UnicodeDecodeError as exc:
+        pytest.fail(f"UTF-8 decoding failure in {rel_path}: {exc}")
